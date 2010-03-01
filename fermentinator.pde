@@ -7,6 +7,7 @@
 
 using namespace Aiko;
 
+#define VERSION    "0.1"
 
 // constants
 #define SECOND     1000    // millis in a second
@@ -16,23 +17,27 @@ using namespace Aiko;
 #define MODE_HEAT  1       // switch is attached to a heater
 
 // configuration options
-#define MIN_TEMP         -4 * 100      // minus 4 deg C
-#define MAX_TEMP         30 * 100      // 30 deg C
-#define COOL_DELAY        3 * MINUTE   // 3 minute delay between turning off cooling and turning it on again
+#define MIN_TEMP         (-4 * 100)      // minus 4 deg C
+#define MAX_TEMP         (30 * 100)      // 30 deg C
+#define COOL_DELAY       (3 * MINUTE)
+// 3 minute delay between turning off cooling and turning it on again
 #define DIFF_TEMP         50           // Keep temp +/- 0.5 deg C
 #define SWITCH_DURATION   500          // millis to "hold down" the button to toggle a switch
+#define TARGET_MULT       (102400l / (MAX_TEMP - MIN_TEMP))
+#define TARGET_OFFSET     MIN_TEMP
 
 // Define IO pins
+#define PIN_TEMP_SET        1  // Analog knob for setting target temperature
 #define PIN_LCD_STROBE      2  // CD4094 8-bit shift/latch
 #define PIN_LCD_DATA        3  // CD4094 8-bit shift/latch
 #define PIN_LCD_CLOCK       4  // CD4094 8-bit shift/latch
 #define PIN_ONE_WIRE        5  // Maxim DS18B20 temperature sensor(s)
 #define PIN_SWITCH_1_ON     6  // Pin to turn on  switch 1
 #define PIN_SWITCH_1_OFF    7  // Pin to turn off switch 1
-#define PIN_SWITCH_2_ON     8  // Pin to turn on  switch 2
-#define PIN_SWITCH_2_OFF    9  // Pin to turn off switch 2
-#define PIN_SWITCH_3_ON     10 // Pin to turn on  switch 3
-#define PIN_SWITCH_3_OFF    11 // Pin to turn off switch 3
+//#define PIN_SWITCH_2_ON     8  // Pin to turn on  switch 2
+//#define PIN_SWITCH_2_OFF    9  // Pin to turn off switch 2
+//#define PIN_SWITCH_3_ON     10 // Pin to turn on  switch 3
+//#define PIN_SWITCH_3_OFF    11 // Pin to turn off switch 3
 
 #define ONE_WIRE_COMMAND_READ_SCRATCHPAD  0xBE
 #define ONE_WIRE_COMMAND_START_CONVERSION 0x44
@@ -44,14 +49,77 @@ using namespace Aiko;
 
 OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
 
-
+// state globals
+byte switch1Mode = MODE_COOL; // Current mode of switch 1
+int currentTemp; // current temperature
+int targetTemp;  // target temperature
+int count;
 
 void setup() {
-  Events.addHandler(temperatureSensorHandler,   1000);
+  Serial.begin(38400);
+  
+  showSplashScreen();
+  Events.addHandler(updateLcd, 1000, 3000);
 }
 
 void loop() {
   Events.loop();
+}
+
+void showSplashScreen(){
+  lcdInitialize();
+  lcdClear();
+  lcdPosition(0, 0);
+  lcdWriteString("Fermentinator 3000");
+  lcdPosition(1, 0);
+  lcdWriteString("v");
+  lcdWriteString(VERSION);
+}
+
+void updateLcd(void){
+  static byte firstRun = true;
+  if (firstRun){
+    lcdClear();
+    firstRun = false;    
+  }
+    
+  if (readCurrentTemp()){
+    lcdPosition(0, 0);
+    byte signBit = currentTemp < 0;
+    if (signBit) currentTemp *= -1;
+      
+    int temperature_whole    = currentTemp / 100;
+    int temperature_fraction = currentTemp % 100;
+    
+    if (signBit) lcdWriteString("-");
+    lcdWriteNumber(temperature_whole);
+    lcdWriteString(".");
+    if (temperature_fraction < 10) lcdWriteNumber(0);
+    lcdWriteNumber(temperature_fraction);
+  }
+  
+  if (readTargetTemp()){
+    lcdPosition(1, 0);
+    byte signBit = currentTemp < 0;
+    if (signBit) currentTemp *= -1;
+      
+    int temperature_whole    = targetTemp / 100;
+    int temperature_fraction = targetTemp % 100;
+    if (signBit) lcdWriteString("-");
+    lcdWriteNumber(temperature_whole);
+    lcdWriteString(".");
+    if (temperature_fraction < 10) lcdWriteNumber(0);
+    lcdWriteNumber(temperature_fraction);
+    
+  }
+  lcdPosition(0, 6);
+  lcdWriteNumber(count++);
+}
+
+byte readTargetTemp(void){
+  long ts = 102400l - (long)analogRead(PIN_TEMP_SET) * 100l;
+  targetTemp = (int)(ts / TARGET_MULT)  + TARGET_OFFSET;
+  return true;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -222,30 +290,32 @@ void lcdWriteNumber(int nr) {
   lcdWriteNumber(value, digits);
 }
 
-void temperatureSensorHandler(void) {  // total time: 33 milliseconds
+byte readCurrentTemp(void) {  // total time: 33 milliseconds
   byte address[8];
   byte data[12];
   byte index;
-
+  Serial.println("reading temp");
+  
   if (! oneWire.search(address)) {  // time: 14 milliseconds
-//  Serial.println("(error 'No more one-wire devices')");
+    //Serial.println("(error 'No more one-wire devices')");
     oneWire.reset_search();         // time: <1 millisecond
-    return;
+    return false;
   }
 
   if (OneWire::crc8(address, 7) != address[7]) {
-//  sendMessage("(error 'Address CRC is not valid')");
-    return;
+    //Serial.println("(error 'Address CRC is not valid')");
+    return false;
   }
 
   if (address[0] != ONE_WIRE_DEVICE_18B20) {
-//  sendMessage("(error 'Device is not a DS18B20')");
-    return;
+    
+    //Serial.println("(error 'Device is not a DS18B20')");
+    return false;
   }
 
   static byte oneWireInitialized = false;
-  
   if (oneWireInitialized) {
+  
     byte present = oneWire.reset();                   // time: 1 millisecond
     oneWire.select(address);                          // time: 5 milliseconds
     oneWire.write(ONE_WIRE_COMMAND_READ_SCRATCHPAD);  // time: 1 millisecond
@@ -253,42 +323,31 @@ void temperatureSensorHandler(void) {  // total time: 33 milliseconds
     for (index = 0; index < 9; index++) {             // time: 5 milliseconds
       data[index] = oneWire.read();
     }
-
+  
     if (OneWire::crc8(data, 8) != data[8]) {
-//    sendMessage("(error 'Data CRC is not valid')");
-      return;
+      //Serial.println("(error 'Data CRC is not valid')");
+      return false;
     }
-
+  
     int temperature = (data[1] << 8) + data[0];
     int signBit     = temperature & 0x8000;
     if (signBit) temperature = (temperature ^ 0xffff) + 1;  // 2's complement
-
-    int tc_100 = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
-
-    int temperature_whole    = tc_100 / 100;
-    int temperature_fraction = tc_100 % 100;
-    
-    static byte lcdInitialized = false;
-    if (lcdInitialized == false) {
-      lcdInitialize();
-      lcdClear();
-      lcdInitialized = true;
-    }
-
-    lcdPosition(0, 0);
-    if (signBit) lcdWriteString("-");
-    lcdWriteNumber(temperature_whole);
-    lcdWriteString(".");
-    if (temperature_fraction < 10) lcdWriteNumber(0);
-    lcdWriteNumber(temperature_fraction);
+  
+    currentTemp = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
+    if (signBit) currentTemp *= -1;
   }
-
+  
+  
+  //Serial.println("initialising onewire");
   // Start temperature conversion with parasitic power
   oneWire.reset();                                      // time: 1 millisecond
   oneWire.select(address);                              // time: 5 milliseconds
   oneWire.write(ONE_WIRE_COMMAND_START_CONVERSION, 1);  // time: 1 millisecond
 
   // Must wait at least 750 milliseconds for temperature conversion to complete
+  byte returnCode = oneWireInitialized;
+  
   oneWireInitialized = true;
+  return returnCode;
 }
 
