@@ -3,14 +3,33 @@
 
 using namespace Aiko;
 
-#define PIN_LCD_STROBE      2 // CD4094 8-bit shift/latch
-#define PIN_LCD_DATA        3 // CD4094 8-bit shift/latch
-#define PIN_LCD_CLOCK       4 // CD4094 8-bit shift/latch
-#define PIN_ONE_WIRE 5
+// Define IO pins
+#define PIN_LCD_STROBE      2  // CD4094 8-bit shift/latch
+#define PIN_LCD_DATA        3  // CD4094 8-bit shift/latch
+#define PIN_LCD_CLOCK       4  // CD4094 8-bit shift/latch
+#define PIN_ONE_WIRE        5  // Maxim DS18B20 temperature sensor(s)
+#define PIN_SWITCH_1_ON     6  // Pin to turn on switch 1
+#define PIN_SWITCH_1_OFF    7  // Pin to turn off switch 1
+#define PIN_SWITCH_2_ON     8  // Pin to turn on switch 2
+#define PIN_SWITCH_2_OFF    9  // Pin to turn off switch 2
+#define PIN_SWITCH_3_ON     10 // Pin to turn on switch 3
+#define PIN_SWITCH_3_OFF    11 // Pin to turn off switch 3
 
-OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
+// constants
+#define SECOND     1000    // millis in a second
+#define MINUTE     60000   // millis in an minute
+#define HOUR       3600000 // millis in an hour
+#define MODE_COOL  0       // switch is attached to a fridge
+#define MODE_HEAT  1       // switch is attached to a heater
 
-byte oneWireInitialized = false;
+// configuration options
+#define MIN_TEMP         -4 * 100      // minus 4 deg C
+#define MAX_TEMP         30 * 100      // 30 deg C
+#define COOL_DELAY        3 * MINUTE   // 3 minute delay between turning off cooling and turning it on again
+#define DIFF_TEMP         1 * 100      // Keep temp +/- 1 deg C
+
+
+
 
 #define ONE_WIRE_COMMAND_READ_SCRATCHPAD  0xBE
 #define ONE_WIRE_COMMAND_START_CONVERSION 0x44
@@ -20,8 +39,9 @@ byte oneWireInitialized = false;
 #define ONE_WIRE_DEVICE_18B20  0x28
 #define ONE_WIRE_DEVICE_18S20  0x10
 
-int temperature_whole = 0;
-int temperature_fraction = 0;
+OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
+
+byte oneWireInitialized = false;
 
 void setup() {
   Events.addHandler(temperatureSensorHandler,   1000);
@@ -242,8 +262,8 @@ void temperatureSensorHandler(void) {  // total time: 33 milliseconds
 
     int tc_100 = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
 
-    temperature_whole    = tc_100 / 100;
-    temperature_fraction = tc_100 % 100;
+    int temperature_whole    = tc_100 / 100;
+    int temperature_fraction = tc_100 % 100;
 
     if (lcdInitialized == false) {
       lcdInitialize();
