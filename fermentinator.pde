@@ -1,6 +1,6 @@
 /**
 * Copyright 2010 Steve Baker <steve@stevebaker.org>
-* This program is distributed under the terms of the GNU General Public License.
+* This program is distributed under the terms of the GNU General Public License
 */
 #include <AikoEvents.h>
 #include <OneWire.h>
@@ -44,7 +44,7 @@ using namespace Aiko;
 
 OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
 
-byte oneWireInitialized = false;
+
 
 void setup() {
   Events.addHandler(temperatureSensorHandler,   1000);
@@ -81,7 +81,7 @@ void loop() {
  *   +--------------------------------------------+
  */
 
-byte lcdInitialized = false;
+
 
 // LCD pin bit-patterns, output from MC14094 -> LCD KS0066 input
 #define LCD_ENABLE_HIGH 0x10  // MC14094 Q4 -> LCD E
@@ -124,8 +124,6 @@ void lcdInitialize(void) {
     lcdWrite(lcdSetup[index ++], false);
     delay(lcdSetup[index ++]);
   }
-
-  lcdInitialized = true;
 }
 
 void lcdWrite(
@@ -245,6 +243,8 @@ void temperatureSensorHandler(void) {  // total time: 33 milliseconds
     return;
   }
 
+  static byte oneWireInitialized = false;
+  
   if (oneWireInitialized) {
     byte present = oneWire.reset();                   // time: 1 millisecond
     oneWire.select(address);                          // time: 5 milliseconds
@@ -267,10 +267,12 @@ void temperatureSensorHandler(void) {  // total time: 33 milliseconds
 
     int temperature_whole    = tc_100 / 100;
     int temperature_fraction = tc_100 % 100;
-
+    
+    static byte lcdInitialized = false;
     if (lcdInitialized == false) {
       lcdInitialize();
       lcdClear();
+      lcdInitialized = true;
     }
 
     lcdPosition(0, 0);
