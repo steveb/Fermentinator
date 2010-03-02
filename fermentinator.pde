@@ -85,41 +85,82 @@ void updateLcd(void){
     
   if (readCurrentTemp()){
     lcdPosition(0, 0);
-    byte signBit = currentTemp < 0;
-    if (signBit) currentTemp *= -1;
-      
-    int temperature_whole    = currentTemp / 100;
-    int temperature_fraction = currentTemp % 100;
-    
-    if (signBit) lcdWriteString("-");
-    lcdWriteNumber(temperature_whole);
-    lcdWriteString(".");
-    if (temperature_fraction < 10) lcdWriteNumber(0);
-    lcdWriteNumber(temperature_fraction);
+    lcdWriteTemperature(currentTemp);
   }
   
   if (readTargetTemp()){
     lcdPosition(1, 0);
-    byte signBit = currentTemp < 0;
-    if (signBit) currentTemp *= -1;
-      
-    int temperature_whole    = targetTemp / 100;
-    int temperature_fraction = targetTemp % 100;
-    if (signBit) lcdWriteString("-");
-    lcdWriteNumber(temperature_whole);
-    lcdWriteString(".");
-    if (temperature_fraction < 10) lcdWriteNumber(0);
-    lcdWriteNumber(temperature_fraction);
-    
+    lcdWriteTemperature(targetTemp);
   }
   lcdPosition(0, 6);
   lcdWriteNumber(count++);
 }
 
 byte readTargetTemp(void){
-  long ts = 102400l - (long)analogRead(PIN_TEMP_SET) * 100l;
+  long ts = long(1024 - analogRead(PIN_TEMP_SET)) * 100l;
   targetTemp = (int)(ts / TARGET_MULT)  + TARGET_OFFSET;
   return true;
+}
+
+byte readCurrentTemp(void) {  // total time: 33 milliseconds
+  byte address[8];
+  byte data[12];
+  byte index;
+  Serial.println("reading temp");
+  
+  if (! oneWire.search(address)) {  // time: 14 milliseconds
+    //Serial.println("(error 'No more one-wire devices')");
+    oneWire.reset_search();         // time: <1 millisecond
+    return false;
+  }
+
+  if (OneWire::crc8(address, 7) != address[7]) {
+    //Serial.println("(error 'Address CRC is not valid')");
+    return false;
+  }
+
+  if (address[0] != ONE_WIRE_DEVICE_18B20) {
+    
+    //Serial.println("(error 'Device is not a DS18B20')");
+    return false;
+  }
+
+  static byte oneWireInitialized = false;
+  if (oneWireInitialized) {
+  
+    byte present = oneWire.reset();                   // time: 1 millisecond
+    oneWire.select(address);                          // time: 5 milliseconds
+    oneWire.write(ONE_WIRE_COMMAND_READ_SCRATCHPAD);  // time: 1 millisecond
+
+    for (index = 0; index < 9; index++) {             // time: 5 milliseconds
+      data[index] = oneWire.read();
+    }
+  
+    if (OneWire::crc8(data, 8) != data[8]) {
+      //Serial.println("(error 'Data CRC is not valid')");
+      return false;
+    }
+  
+    int temperature = (data[1] << 8) + data[0];
+    int signBit     = temperature & 0x8000;
+    if (signBit) temperature = (temperature ^ 0xffff) + 1;  // 2's complement
+  
+    currentTemp = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
+    if (signBit) currentTemp *= -1;
+  }
+  
+  
+  //Serial.println("initialising onewire");
+  // Start temperature conversion with parasitic power
+  oneWire.reset();                                      // time: 1 millisecond
+  oneWire.select(address);                              // time: 5 milliseconds
+  oneWire.write(ONE_WIRE_COMMAND_START_CONVERSION, 1);  // time: 1 millisecond
+
+  // Must wait at least 750 milliseconds for temperature conversion to complete
+  byte returnCode = oneWireInitialized;
+  
+  oneWireInitialized = true;
+  return returnCode;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -234,9 +275,7 @@ void lcdPosition(
   delayMicroseconds(40);
 }
 
-void lcdWriteString(
-  char message[]) {
-
+void lcdWriteString(char message[]) {
   while (*message) lcdWrite((*message ++), true);
 }
 
@@ -290,64 +329,25 @@ void lcdWriteNumber(int nr) {
   lcdWriteNumber(value, digits);
 }
 
-byte readCurrentTemp(void) {  // total time: 33 milliseconds
-  byte address[8];
-  byte data[12];
-  byte index;
-  Serial.println("reading temp");
-  
-  if (! oneWire.search(address)) {  // time: 14 milliseconds
-    //Serial.println("(error 'No more one-wire devices')");
-    oneWire.reset_search();         // time: <1 millisecond
-    return false;
-  }
 
-  if (OneWire::crc8(address, 7) != address[7]) {
-    //Serial.println("(error 'Address CRC is not valid')");
-    return false;
-  }
-
-  if (address[0] != ONE_WIRE_DEVICE_18B20) {
+void lcdWriteTemperature(int temp) {
+  byte signBit = temp < 0;
+  if (signBit) temp *= -1;
     
-    //Serial.println("(error 'Device is not a DS18B20')");
-    return false;
+  int temperature_whole    = temp / 100;
+  int temperature_fraction = temp % 100;
+    
+  if (signBit){
+    lcdWriteString("-");
   }
-
-  static byte oneWireInitialized = false;
-  if (oneWireInitialized) {
-  
-    byte present = oneWire.reset();                   // time: 1 millisecond
-    oneWire.select(address);                          // time: 5 milliseconds
-    oneWire.write(ONE_WIRE_COMMAND_READ_SCRATCHPAD);  // time: 1 millisecond
-
-    for (index = 0; index < 9; index++) {             // time: 5 milliseconds
-      data[index] = oneWire.read();
-    }
-  
-    if (OneWire::crc8(data, 8) != data[8]) {
-      //Serial.println("(error 'Data CRC is not valid')");
-      return false;
-    }
-  
-    int temperature = (data[1] << 8) + data[0];
-    int signBit     = temperature & 0x8000;
-    if (signBit) temperature = (temperature ^ 0xffff) + 1;  // 2's complement
-  
-    currentTemp = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
-    if (signBit) currentTemp *= -1;
+  else {
+    lcdWriteString(" ");
   }
   
-  
-  //Serial.println("initialising onewire");
-  // Start temperature conversion with parasitic power
-  oneWire.reset();                                      // time: 1 millisecond
-  oneWire.select(address);                              // time: 5 milliseconds
-  oneWire.write(ONE_WIRE_COMMAND_START_CONVERSION, 1);  // time: 1 millisecond
-
-  // Must wait at least 750 milliseconds for temperature conversion to complete
-  byte returnCode = oneWireInitialized;
-  
-  oneWireInitialized = true;
-  return returnCode;
+  if (temperature_whole < 10) lcdWriteString(" ");
+  lcdWriteNumber(temperature_whole);
+  lcdWriteString(".");
+  if (temperature_fraction < 10) lcdWriteNumber(0);
+  lcdWriteNumber(temperature_fraction);
 }
 
