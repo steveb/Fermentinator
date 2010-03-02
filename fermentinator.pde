@@ -59,7 +59,8 @@ void setup() {
   Serial.begin(38400);
   
   showSplashScreen();
-  Events.addHandler(updateLcd, 1000, 3000);
+  Events.addHandler(readCurrentTemp, 1000, 3000);
+  Events.addHandler(readTargetTemp, 250, 3000);
 }
 
 void loop() {
@@ -83,26 +84,40 @@ void updateLcd(void){
     firstRun = false;    
   }
     
-  if (readCurrentTemp()){
-    lcdPosition(0, 0);
-    lcdWriteTemperature(currentTemp);
-  }
+  lcdPosition(0, 0);
+  lcdWriteString("Current:");
+  lcdWriteTemperature(currentTemp);
+
+  lcdPosition(1, 0);
+  lcdWriteString(" Target:");
+  lcdWriteTemperature(targetTemp);
   
-  if (readTargetTemp()){
-    lcdPosition(1, 0);
-    lcdWriteTemperature(targetTemp);
-  }
-  lcdPosition(0, 6);
+  lcdPosition(2, 0);
   lcdWriteNumber(count++);
 }
 
-byte readTargetTemp(void){
-  long ts = long(1024 - analogRead(PIN_TEMP_SET)) * 100l;
-  targetTemp = (int)(ts / TARGET_MULT)  + TARGET_OFFSET;
-  return true;
+void checkSwitchAction(){
+  if (switch1Mode == MODE_COOL){
+    if (currentTemp > targetTemp + DIFF_TEMP){
+      // trigger switch on
+    }
+    else if (currentTemp <= targetTemp){
+      // trigger switch off
+    }
+  }
+  else {
+    
+  }
 }
 
-byte readCurrentTemp(void) {  // total time: 33 milliseconds
+void readTargetTemp(void){
+  int previousTarget = targetTemp;
+  long ts = long(1024 - analogRead(PIN_TEMP_SET)) * 100l;
+  targetTemp = (int)(ts / TARGET_MULT)  + TARGET_OFFSET;
+  if (previousTarget != targetTemp) updateLcd();
+}
+
+void readCurrentTemp(void) {  // total time: 33 milliseconds
   byte address[8];
   byte data[12];
   byte index;
@@ -111,18 +126,18 @@ byte readCurrentTemp(void) {  // total time: 33 milliseconds
   if (! oneWire.search(address)) {  // time: 14 milliseconds
     //Serial.println("(error 'No more one-wire devices')");
     oneWire.reset_search();         // time: <1 millisecond
-    return false;
+    return;
   }
 
   if (OneWire::crc8(address, 7) != address[7]) {
     //Serial.println("(error 'Address CRC is not valid')");
-    return false;
+    return;
   }
 
   if (address[0] != ONE_WIRE_DEVICE_18B20) {
     
     //Serial.println("(error 'Device is not a DS18B20')");
-    return false;
+    return;
   }
 
   static byte oneWireInitialized = false;
@@ -138,7 +153,7 @@ byte readCurrentTemp(void) {  // total time: 33 milliseconds
   
     if (OneWire::crc8(data, 8) != data[8]) {
       //Serial.println("(error 'Data CRC is not valid')");
-      return false;
+      return;
     }
   
     int temperature = (data[1] << 8) + data[0];
@@ -147,6 +162,7 @@ byte readCurrentTemp(void) {  // total time: 33 milliseconds
   
     currentTemp = (6 * temperature) + temperature / 4;  // multiply by 100 * 0.0625
     if (signBit) currentTemp *= -1;
+    updateLcd();
   }
   
   
@@ -157,10 +173,7 @@ byte readCurrentTemp(void) {  // total time: 33 milliseconds
   oneWire.write(ONE_WIRE_COMMAND_START_CONVERSION, 1);  // time: 1 millisecond
 
   // Must wait at least 750 milliseconds for temperature conversion to complete
-  byte returnCode = oneWireInitialized;
-  
   oneWireInitialized = true;
-  return returnCode;
 }
 
 /* -------------------------------------------------------------------------- */
