@@ -18,11 +18,11 @@ using namespace Aiko;
 
 // configuration options
 #define MIN_TEMP         (-4 * 100)      // minus 4 deg C
-#define MAX_TEMP         (30 * 100)      // 30 deg C
+#define MAX_TEMP         (40 * 100)      // 30 deg C
 #define COOL_DELAY       (3 * MINUTE)
 // 3 minute delay between turning off cooling and turning it on again
 #define DIFF_TEMP         50           // Keep temp +/- 0.5 deg C
-#define SWITCH_DURATION   500          // millis to "hold down" the button to toggle a switch
+#define SWITCH_DURATION   100          // millis to "hold down" the button to toggle a switch
 #define TARGET_MULT       (102400l / (MAX_TEMP - MIN_TEMP))
 #define TARGET_OFFSET     MIN_TEMP
 
@@ -53,14 +53,19 @@ OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
 byte switch1Mode = MODE_COOL; // Current mode of switch 1
 int currentTemp; // current temperature
 int targetTemp;  // target temperature
-int count;
+byte switch1on = false; // whether the switch 1 is currently in the on state
+unsigned long switch1Time; // millis since switch 1 changed state
 
 void setup() {
   Serial.begin(38400);
+  pinMode(PIN_SWITCH_1_ON, OUTPUT);
+  pinMode(PIN_SWITCH_1_OFF, OUTPUT);
   
   showSplashScreen();
-  Events.addHandler(readCurrentTemp, 1000, 3000);
+  Events.addHandler(readCurrentTemp, 1000, 2000);
   Events.addHandler(readTargetTemp, 250, 3000);
+  Events.addHandler(checkSwitchAction, 2000, 3500);
+  Events.addHandler(updateLcd, 1000, 3600);
 }
 
 void loop() {
@@ -88,26 +93,82 @@ void updateLcd(void){
   lcdWriteString("Current:");
   lcdWriteTemperature(currentTemp);
 
-  lcdPosition(1, 0);
-  lcdWriteString(" Target:");
+  lcdPosition(1, 1);
+  lcdWriteString("Target:");
   lcdWriteTemperature(targetTemp);
   
-  lcdPosition(2, 0);
-  lcdWriteNumber(count++);
+  lcdPosition(2, 3);
+  lcdWriteString("Mode: ");
+  if (switch1Mode == MODE_COOL){
+    lcdWriteString("COOLING");
+  }
+  else if (switch1Mode == MODE_HEAT){
+    lcdWriteString("HEATING");
+  }
+  
+  lcdPosition(3, 1);
+  lcdWriteString("Switch: ");
+  if (switch1on){
+    lcdWriteString("ON  ");
+  }
+  else{
+    lcdWriteString("OFF ");
+  }
+  unsigned long s = (millis() - switch1Time) / 1000ul;
+  
+  int m = s / 60;
+  int h = m / 60;
+  s = s % 60;
+  m = m % 60;
+
+  if (h != 0){
+    lcdWriteNumber(h, 2);
+    lcdWriteString(":");
+  }
+
+  lcdWriteNumber(m, 2);
+  if (h == 0){
+    lcdWriteString(":");
+    lcdWriteNumber(s, 2);
+  }
 }
 
-void checkSwitchAction(){
+void checkSwitchAction(void){
   if (switch1Mode == MODE_COOL){
     if (currentTemp > targetTemp + DIFF_TEMP){
       // trigger switch on
+      if (!switch1on) {
+        switch1Time = millis();
+        switch1on = true;
+        updateLcd();
+      }
+
     }
     else if (currentTemp <= targetTemp){
       // trigger switch off
+      if (switch1on) {
+        switch1Time = millis();
+        switch1on = false;
+        updateLcd();
+      }
     }
   }
-  else {
-    
+  //else {
+  //  
+  //}
+  
+  if (switch1on){
+    digitalWrite(PIN_SWITCH_1_ON, HIGH);
   }
+  else {
+    digitalWrite(PIN_SWITCH_1_OFF, HIGH);
+  }
+  Events.addOneShotHandler(switchDone, SWITCH_DURATION);
+}
+
+void switchDone(void){
+  digitalWrite(PIN_SWITCH_1_ON, LOW);
+  digitalWrite(PIN_SWITCH_1_OFF, LOW);
 }
 
 void readTargetTemp(void){
@@ -121,7 +182,6 @@ void readCurrentTemp(void) {  // total time: 33 milliseconds
   byte address[8];
   byte data[12];
   byte index;
-  Serial.println("reading temp");
   
   if (! oneWire.search(address)) {  // time: 14 milliseconds
     //Serial.println("(error 'No more one-wire devices')");
@@ -349,7 +409,7 @@ void lcdWriteTemperature(int temp) {
     
   int temperature_whole    = temp / 100;
   int temperature_fraction = temp % 100;
-    
+  
   if (signBit){
     lcdWriteString("-");
   }
@@ -360,7 +420,6 @@ void lcdWriteTemperature(int temp) {
   if (temperature_whole < 10) lcdWriteString(" ");
   lcdWriteNumber(temperature_whole);
   lcdWriteString(".");
-  if (temperature_fraction < 10) lcdWriteNumber(0);
-  lcdWriteNumber(temperature_fraction);
+  lcdWriteNumber(temperature_fraction, 2);
 }
 
