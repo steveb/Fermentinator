@@ -10,16 +10,16 @@ using namespace Aiko;
 #define VERSION    "0.1"
 
 // constants
-#define SECOND     1000    // millis in a second
-#define MINUTE     60000   // millis in an minute
-#define HOUR       3600000 // millis in an hour
+#define SECOND     1000ul    // millis in a second
+#define MINUTE     60000ul   // millis in an minute
+#define HOUR       3600000ul // millis in an hour
 #define MODE_COOL  0       // switch is attached to a fridge
 #define MODE_HEAT  1       // switch is attached to a heater
 
 // configuration options
 #define MIN_TEMP         (-4 * 100)      // minus 4 deg C
 #define MAX_TEMP         (40 * 100)      // 30 deg C
-#define COOL_DELAY       (3 * MINUTE)
+#define COOL_DELAY       (1ul * MINUTE)
 // 3 minute delay between turning off cooling and turning it on again
 #define DIFF_TEMP         50           // Keep temp +/- 0.5 deg C
 #define SWITCH_DURATION   100          // millis to "hold down" the button to toggle a switch
@@ -135,7 +135,7 @@ void updateLcd(void){
 
 void checkSwitchAction(void){
   if (switch1Mode == MODE_COOL){
-    if (currentTemp > targetTemp + DIFF_TEMP){
+    if ((currentTemp > targetTemp + DIFF_TEMP) && (millis() - switch1Time > COOL_DELAY)){
       // trigger switch on
       if (!switch1on) {
         switch1Time = millis();
