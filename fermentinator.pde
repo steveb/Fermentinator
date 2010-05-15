@@ -7,22 +7,19 @@
 
 using namespace Aiko;
 
-#define VERSION    "0.1"
+#define VERSION    "0.3"
 
 // constants
 #define SECOND     1000ul    // millis in a second
 #define MINUTE     60000ul   // millis in an minute
 #define HOUR       3600000ul // millis in an hour
-#define MODE_COOL  0       // switch is attached to a fridge
-#define MODE_HEAT  1       // switch is attached to a heater
 
 // configuration options
 #define MIN_TEMP         (-4 * 100)      // minus 4 deg C
 #define MAX_TEMP         (40 * 100)      // 30 deg C
-#define COOL_DELAY       (1ul * MINUTE)
+#define COOL_DELAY       (3ul * MINUTE)
 // 3 minute delay between turning off cooling and turning it on again
 #define DIFF_TEMP         50           // Keep temp +/- 0.5 deg C
-#define SWITCH_DURATION   100          // millis to "hold down" the button to toggle a switch
 #define TARGET_MULT       (102400l / (MAX_TEMP - MIN_TEMP))
 #define TARGET_OFFSET     MIN_TEMP
 
@@ -32,12 +29,8 @@ using namespace Aiko;
 #define PIN_LCD_DATA        3  // CD4094 8-bit shift/latch
 #define PIN_LCD_CLOCK       4  // CD4094 8-bit shift/latch
 #define PIN_ONE_WIRE        5  // Maxim DS18B20 temperature sensor(s)
-#define PIN_SWITCH_1_ON     6  // Pin to turn on  switch 1
-#define PIN_SWITCH_1_OFF    7  // Pin to turn off switch 1
-//#define PIN_SWITCH_2_ON     8  // Pin to turn on  switch 2
-//#define PIN_SWITCH_2_OFF    9  // Pin to turn off switch 2
-//#define PIN_SWITCH_3_ON     10 // Pin to turn on  switch 3
-//#define PIN_SWITCH_3_OFF    11 // Pin to turn off switch 3
+#define PIN_SWITCH_1        6  // Pin to turn on  switch 1
+#define PIN_SWITCH_2        7  // Pin to turn on switch 2
 
 #define ONE_WIRE_COMMAND_READ_SCRATCHPAD  0xBE
 #define ONE_WIRE_COMMAND_START_CONVERSION 0x44
@@ -50,21 +43,26 @@ using namespace Aiko;
 OneWire oneWire(PIN_ONE_WIRE);  // Maxim DS18B20 temperature sensor
 
 // state globals
-byte switch1Mode = MODE_COOL; // Current mode of switch 1
 int currentTemp; // current temperature
 int targetTemp;  // target temperature
 byte switch1on = false; // whether the switch 1 is currently in the on state
-unsigned long switch1Time; // millis since switch 1 changed state
+byte switch2on = false; // whether the switch 2 is currently in the on state
+unsigned long switch1onTime; // millis since switch 1 went on
+unsigned long switch1offTime; // millis since switches 1 went off
+unsigned long switch2onTime; // millis since switches 2 went on
+unsigned long switch2offTime; // millis since switches 2 went off
+unsigned long lastOnDuration; // millis that the most recent switch (1 or 2) was on for
+unsigned long lastIdleDuration; // millis that have most recently been spent with switches off
 
 void setup() {
   Serial.begin(38400);
-  pinMode(PIN_SWITCH_1_ON, OUTPUT);
-  pinMode(PIN_SWITCH_1_OFF, OUTPUT);
+  pinMode(PIN_SWITCH_1, OUTPUT);
+  pinMode(PIN_SWITCH_2, OUTPUT);
   
   showSplashScreen();
   Events.addHandler(readCurrentTemp, 1000, 2000);
   Events.addHandler(readTargetTemp, 250, 3000);
-  Events.addHandler(checkSwitchAction, 2000, 3500);
+  Events.addHandler(checkSwitchFermentation, 2000, 3500);
   Events.addHandler(updateLcd, 1000, 3600);
 }
 
@@ -90,85 +88,71 @@ void updateLcd(void){
   }
     
   lcdPosition(0, 0);
-  lcdWriteString("Current:");
-  lcdWriteTemperature(currentTemp);
-
-  lcdPosition(1, 1);
-  lcdWriteString("Target:");
+  lcdWriteString("Temp");
   lcdWriteTemperature(targetTemp);
+  lcdWriteString(" ->");
+  lcdWriteTemperature(currentTemp);
   
-  lcdPosition(2, 3);
-  lcdWriteString("Mode: ");
-  if (switch1Mode == MODE_COOL){
-    lcdWriteString("COOLING");
-  }
-  else if (switch1Mode == MODE_HEAT){
-    lcdWriteString("HEATING");
-  }
-  
-  lcdPosition(3, 1);
-  lcdWriteString("Switch: ");
+  lcdPosition(1, 0);
+  lcdWriteString("Mode ");
   if (switch1on){
-    lcdWriteString("ON  ");
+    lcdWriteString("COOL ");
+    lcdWriteDuration(millis() - switch1onTime);
   }
-  else{
-    lcdWriteString("OFF ");
-  }
-  unsigned long s = (millis() - switch1Time) / 1000ul;
-  
-  int m = s / 60;
-  int h = m / 60;
-  s = s % 60;
-  m = m % 60;
-
-  if (h != 0){
-    lcdWriteNumber(h, 2);
-    lcdWriteString(":");
-  }
-
-  lcdWriteNumber(m, 2);
-  if (h == 0){
-    lcdWriteString(":");
-    lcdWriteNumber(s, 2);
-  }
-}
-
-void checkSwitchAction(void){
-  if (switch1Mode == MODE_COOL){
-    if ((currentTemp > targetTemp + DIFF_TEMP) && (millis() - switch1Time > COOL_DELAY)){
-      // trigger switch on
-      if (!switch1on) {
-        switch1Time = millis();
-        switch1on = true;
-        updateLcd();
-      }
-
-    }
-    else if (currentTemp <= targetTemp){
-      // trigger switch off
-      if (switch1on) {
-        switch1Time = millis();
-        switch1on = false;
-        updateLcd();
-      }
-    }
-  }
-  //else {
-  //  
-  //}
-  
-  if (switch1on){
-    digitalWrite(PIN_SWITCH_1_ON, HIGH);
+  else if (switch2on){
+    lcdWriteString("HEAT ");
+    lcdWriteDuration(millis() - switch2onTime);
   }
   else {
-    digitalWrite(PIN_SWITCH_1_OFF, HIGH);
+    lcdWriteString("IDLE ");
+    lcdWriteDuration(millis() - max(switch1offTime, switch2offTime));
   }
-  Events.addOneShotHandler(switchDone, SWITCH_DURATION);
+  
+  lcdPosition(2, 0);
+  lcdWriteString("Duty ");
+  if (switch1offTime > switch2offTime){
+    lcdWriteString("COOL ");
+  }
+  else {
+    lcdWriteString("HEAT ");
+  }
+  unsigned long totalDuration = lastOnDuration + lastIdleDuration;
+  if (totalDuration > 0){
+    lcdWriteDuration(totalDuration);
+    lcdWriteString(" ");
+    lcdWritePercent((lastOnDuration * 100) / totalDuration);
+  }
 }
 
-void switchDone(void){
-  digitalWrite(PIN_SWITCH_1_ON, LOW);
-  digitalWrite(PIN_SWITCH_1_OFF, LOW);
+void checkSwitchFermentation(void){
+  if ((currentTemp > targetTemp + DIFF_TEMP) && (millis() - switch1offTime > COOL_DELAY) && !switch1on){
+    switch1onTime = millis();
+    switch1on = true;
+    lastIdleDuration = switch1onTime - max(switch1offTime, switch2offTime);
+    updateLcd();
+  }
+  else if (currentTemp <= targetTemp && switch1on){
+    switch1offTime = millis();
+    switch1on = false;
+    lastOnDuration = switch1offTime - switch1onTime;
+    updateLcd();
+  }
+  
+  if ((currentTemp < targetTemp - DIFF_TEMP) && !switch2on){
+    // trigger switch on
+    switch2onTime = millis();
+    switch2on = true;
+    lastIdleDuration = switch2onTime - max(switch1offTime, switch2offTime);
+    updateLcd();
+  }
+  else if (currentTemp >= targetTemp && switch2on) {
+    switch2offTime = millis();
+    switch2on = false;
+    lastOnDuration = switch2offTime - switch2onTime;
+    updateLcd();
+  }
+  digitalWrite(PIN_SWITCH_1, switch1on ? HIGH : LOW);
+  digitalWrite(PIN_SWITCH_2, switch2on ? HIGH : LOW);
 }
 
 void readTargetTemp(void){
@@ -421,5 +405,38 @@ void lcdWriteTemperature(int temp) {
   lcdWriteNumber(temperature_whole);
   lcdWriteString(".");
   lcdWriteNumber(temperature_fraction, 2);
+}
+
+void lcdWriteDuration(unsigned long duration){  
+  unsigned long s = duration / 1000ul;
+  int m = s / 60;
+  int h = m / 60;
+  s = s % 60;
+  m = m % 60;
+
+  if (h != 0){
+    lcdWriteNumber(h, 2);
+    lcdWriteString(":");
+  }
+
+  lcdWriteNumber(m, 2);
+  if (h == 0){
+    lcdWriteString(":");
+    lcdWriteNumber(s, 2);
+    lcdWriteString("s");
+  }
+  if (h != 0){
+    lcdWriteString("m");
+  }
+}
+
+void lcdWritePercent(unsigned long percent){  
+  if (percent < 10){
+    lcdWriteString(" ");
+  }
+  lcdWriteNumber(percent);
+  if (percent < 100){
+    lcdWriteString("%");
+  }
 }
 
